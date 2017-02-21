@@ -587,12 +587,6 @@ namespace LetsEncryptNginxConfigurator
         {
             try
             {
-                if (File.Exists(SitesAvailableDefaultConfigPath))
-                {
-                    WriteLine("Deleting previous configuration file...");
-                    File.Delete(SitesAvailableDefaultConfigPath);
-                }
-
                 WriteLine("Creating new configuration file...");
                 using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default-after.conf"))))
                 {
