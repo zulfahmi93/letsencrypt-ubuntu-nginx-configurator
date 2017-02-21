@@ -163,7 +163,7 @@ namespace LetsEncryptNginxConfigurator
 #if DEBUG
             if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --staging --dry-run --email {email}"))
 #else
-            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --email {email}"))
+            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --email {email} --agree-tos"))
 #endif
             {
                 PrintError("Failed to obtain SSL certificate from Let's Encrypt!");
