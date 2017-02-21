@@ -19,8 +19,14 @@ namespace LetsEncryptNginxConfigurator
     {
         #region Constants
 
-        private const string SitesAvailableDirectory = "/etc/nginx/sites-available/";
+        private const string NginxDirectory = "/etc/nginx/";
+        private const string SitesAvailableDirectory = NginxDirectory + "sites-available/";
+        private const string NginxSnippetsDirectory = NginxDirectory + "snippets/";
+
         private const string SitesAvailableDefaultConfigPath = SitesAvailableDirectory + "default";
+        private const string SslDomainSnippetConfigPathFormat = NginxSnippetsDirectory + "ssl-{0}.conf";
+        private const string SslParamsSnippetConfigPath = NginxSnippetsDirectory + "ssl-params.conf";
+
         private static readonly char[] SplitChars = { ' ', '-', '\t' };
 
         #endregion
@@ -176,7 +182,13 @@ namespace LetsEncryptNginxConfigurator
             ResetColor();
 
 
-            //
+            // copy snippet config file
+            PrintRunningProcess("Copying nginx SSL configuration file...");
+            if (!CopyNginxSslConfiguration(domain))
+            {
+                PrintError("Failed to copy nginx SSL configuration file!");
+                return 12;
+            }
 
             return 0;
         }
@@ -497,6 +509,60 @@ namespace LetsEncryptNginxConfigurator
 
                 ForegroundColor = ConsoleColor.Green;
                 WriteLine("Configuration file created!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool CopyNginxSslConfiguration(string domain)
+        {
+            try
+            {
+                string domainSnippetPath = string.Format(SslDomainSnippetConfigPathFormat, domain);
+                if (File.Exists(domainSnippetPath))
+                {
+                    File.Delete(domainSnippetPath);
+                }
+
+                if (File.Exists(SslParamsSnippetConfigPath))
+                {
+                    File.Delete(SslParamsSnippetConfigPath);
+                }
+
+                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "ssl-snippet.conf"))))
+                {
+                    string content = reader.ReadToEnd();
+                    content = string.Format(content, domain);
+
+                    using (StreamWriter writer = new StreamWriter(File.Open(domainSnippetPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine($"Created file {Path.GetFileName(domainSnippetPath)}!");
+                ResetColor();
+
+                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "ssl-params-snippet.conf"))))
+                {
+                    string content = reader.ReadToEnd();
+                    content = string.Format(content, domain);
+
+                    using (StreamWriter writer = new StreamWriter(File.Open(SslParamsSnippetConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine($"Created file {Path.GetFileName(SslParamsSnippetConfigPath)}!");
                 ResetColor();
 
                 return true;
