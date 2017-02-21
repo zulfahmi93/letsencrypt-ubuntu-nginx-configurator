@@ -22,10 +22,12 @@ namespace LetsEncryptNginxConfigurator
         private const string NginxDirectory = "/etc/nginx/";
         private const string SitesAvailableDirectory = NginxDirectory + "sites-available/";
         private const string NginxSnippetsDirectory = NginxDirectory + "snippets/";
+        private const string CronDirectory = "/etc/cron.d/";
 
         private const string SitesAvailableDefaultConfigPath = SitesAvailableDirectory + "default";
         private const string SslDomainSnippetConfigPathFormat = NginxSnippetsDirectory + "ssl-{0}.conf";
         private const string SslParamsSnippetConfigPath = NginxSnippetsDirectory + "ssl-params.conf";
+        private const string LetsEncryptCronFilePath = CronDirectory + "letsencrypt";
 
         private static readonly char[] SplitChars = { ' ', '-', '\t' };
 
@@ -158,7 +160,11 @@ namespace LetsEncryptNginxConfigurator
             // run certbot
             string args = Regex.IsMatch(domain, @"www") ? domain : $"{domain},www.{domain}";
             PrintRunningProcess("Requesting SSL certificate...");
-            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --register-unsafely-without-email --staging --dry-run --email {email}"))
+#if DEBUG
+            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --staging --dry-run --email {email}"))
+#else
+            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --email {email}"))
+#endif
             {
                 PrintError("Failed to obtain SSL certificate from Let's Encrypt!");
                 return 12;
@@ -197,6 +203,51 @@ namespace LetsEncryptNginxConfigurator
             {
                 PrintError("Failed to generate new nginx sites-available configuration!");
                 return 14;
+            }
+
+
+            // run nginx config verifier
+            PrintRunningProcess("Checking nginx configuration...");
+            if (!RunProcess("nginx", "-t"))
+            {
+                PrintError("Failed nginx configuration checker test!");
+                return 15;
+            }
+
+            ForegroundColor = ConsoleColor.Green;
+            WriteLine("nginx configuration checker test is passed!");
+            ResetColor();
+
+
+            // restart nginx service
+            PrintRunningProcess("Restarting nginx...");
+            if (!RunProcess("service", "nginx restart"))
+            {
+                PrintError("Failed to restart nginx service!");
+                return 16;
+            }
+
+            Thread.Sleep(TimeSpan.FromSeconds(2));
+            ForegroundColor = ConsoleColor.Green;
+            WriteLine("nginx restarted!");
+            ResetColor();
+
+
+            // schedule auto renew
+            PrintRunningProcess("Scheduling Let's Encrypt to auto renew the certficate...");
+            if (!ScheduleAutoRenew())
+            {
+                PrintError("Failed to schedule the auto renewal of the certificate! Please do this manually using crontab -e command.");
+            }
+            else
+            {
+                // restart cron service
+                PrintRunningProcess("Restarting cron...");
+                if (!RunProcess("service", "cron restart"))
+                {
+                    PrintError("Failed to restart cron service!");
+                    return 17;
+                }
             }
 
             return 0;
@@ -594,6 +645,33 @@ namespace LetsEncryptNginxConfigurator
                     content = string.Format(content, domain);
 
                     using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("Configuration file created!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool ScheduleAutoRenew()
+        {
+            try
+            {
+                WriteLine("Generating cron file...");
+                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "cron"))))
+                {
+                    string content = reader.ReadToEnd();
+                    using (StreamWriter writer = new StreamWriter(File.Open(LetsEncryptCronFilePath, FileMode.Create, FileAccess.Write)))
                     {
                         writer.Write(content);
                     }

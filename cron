@@ -1,0 +1,2 @@
+﻿30 2 * * 1 /usr/bin/letsencrypt renew >> /root/letsencrypt-renew.log
+35 2 * * 1 /bin/systemctl reload nginx
