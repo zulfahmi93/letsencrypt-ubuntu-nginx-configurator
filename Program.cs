@@ -17,59 +17,121 @@ namespace LetsEncryptNginxConfigurator
 {
     public class Program
     {
+        #region Constants
+
         private const string SitesAvailableDirectory = "/etc/nginx/sites-available/";
         private const string SitesAvailableDefaultConfigPath = SitesAvailableDirectory + "default";
         private static readonly char[] SplitChars = { ' ', '-', '\t' };
-        private static readonly string HomePath = Environment.GetEnvironmentVariable("HOME");
-        private static readonly string AppPath = PlatformServices.Default.Application.ApplicationBasePath;
+
+        #endregion
 
 
+        #region Fields
+
+        private static string _homePath;
+        private static string _appPath;
         private static int _count;
 
-        public static void Main()
+        #endregion
+
+        public static int Main()
         {
+            _homePath = Environment.GetEnvironmentVariable("HOME");
+            _appPath = PlatformServices.Default.Application.ApplicationBasePath;
+
+            if (string.IsNullOrWhiteSpace(_homePath))
+            {
+                PrintWarning("Unable to retrieve your HOME folder location as HOME environment was not defined!");
+                return 1;
+            }
+
             PrintWarning("Your existing nginx configuration will be replaced! The program will make a backup of your current configuration in your HOME folder.");
             bool? @continue = GetBooleanUserInput("Do you want to continue?");
             if (@continue != true)
             {
-                return;
+                return 2;
             }
 
             WriteLine();
-
             string domain = GetStringUserInput("Provide your domain");
             if (domain == null)
             {
-                return;
+                return 3;
+            }
+
+            string email = GetStringUserInput("Provide your e-mail");
+            if (email == null)
+            {
+                return 4;
             }
 
             PrintRunningProcess("Running apt-get update...");
-            RunProcess("apt-get", "update");
+            if (!RunProcess("apt-get", "update"))
+            {
+                PrintError("Failed to run apt-get update command! Do you run this configurator as root?");
+                return 5;
+            }
+
+            PrintRunningProcess("Installing nginx...");
+            if (!RunProcess("apt-get", "install nginx"))
+            {
+                PrintError("Failed to install nginx package! Do you run this configurator as root?");
+                return 6;
+            }
 
             PrintRunningProcess("Installing Let's encrypt...");
-            RunProcess("apt-get", "install letsencrypt");
+            if (!RunProcess("apt-get", "install letsencrypt"))
+            {
+                PrintError("Failed to install Let's Encrypt package! Do you run this configurator as root?");
+                return 7;
+            }
+
+            PrintRunningProcess("Backing up nginx configuration...");
+            if (!BackupNginxConfig())
+            {
+                PrintError("Failed to back up nginx configuration!");
+                return 8;
+            }
 
             PrintRunningProcess("Creating nginx sites-available configuration...");
-            CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt();
+            if (!CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt())
+            {
+                PrintError("Failed to create nginx sites-available configuration!");
+                return 9;
+            }
 
             PrintRunningProcess("Checking nginx configuration...");
-            if (!RunProcess("nginx", "-t", "success", "fail").Result)
+            if (!RunProcess("nginx", "-t"))
             {
                 PrintError("Failed nginx configuration checker test!");
-                return;
+                return 10;
             }
 
             WriteLine("nginx configuration checker test is passed!");
 
             PrintRunningProcess("Restarting nginx...");
-            RunProcess("service", "nginx restart");
-            Thread.Sleep(TimeSpan.FromSeconds(5));
+            if (!RunProcess("service", "nginx restart"))
+            {
+                PrintError("Failed to restart nginx service!");
+                return 11;
+            }
+
+            Thread.Sleep(TimeSpan.FromSeconds(2));
             WriteLine("nginx restarted!");
 
-            string args = Regex.IsMatch(domain, @"www") ? domain : $"{domain} -d www.{domain}";
+            string args = Regex.IsMatch(domain, @"www") ? domain : $"{domain},www.{domain}";
             PrintRunningProcess("Requesting SSL certificate...");
-            RunProcess("letsencrypt", $"certonly -n -a webroot --webroot-path=/var/www/html -d {args} --register-unsafely-without-email --staging");
+            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --register-unsafely-without-email --staging --dry-run --email {email}"))
+            {
+                PrintError("Failed to obtain SSL certificate from Let's Encrypt!");
+                return 12;
+            }
+
             WriteLine("SSL certificate obtained!");
+
+
+
+            return 0;
         }
 
         private static void PrintRunningProcess(string message)
@@ -84,7 +146,7 @@ namespace LetsEncryptNginxConfigurator
             WriteLine();
         }
 
-        private static void RunProcess(string processName, string args)
+        private static bool RunProcess(string processName, string args)
         {
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
@@ -95,6 +157,8 @@ namespace LetsEncryptNginxConfigurator
 
             Process process = Process.Start(startInfo);
             process.WaitForExit();
+
+            return process.ExitCode == 0;
         }
 
         private static Task<bool> RunProcess(string processName, string args, string successReturn, string failReturn)
@@ -313,25 +377,87 @@ namespace LetsEncryptNginxConfigurator
             }
         }
 
-        private static void CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt()
+        private static bool BackupNginxConfig()
         {
-            WriteLine("Creating configuration file...");
+            const string path = "/etc/nginx/";
+            string backupPath = Path.Combine(_homePath, "nginx-backup", DateTime.Now.ToString("yyyyMMddHHmm"));
 
-            if (!Directory.Exists(SitesAvailableDirectory))
+            try
             {
-                Directory.CreateDirectory(SitesAvailableDirectory);
-            }
-
-            using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(AppPath, "default"))))
-            {
-                string content = reader.ReadToEnd();
-                using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
+                WriteLine("Backing up existing nginx configuration to HOME folder...");
+                if (!Directory.Exists(path))
                 {
-                    writer.Write(content);
+                    ForegroundColor = ConsoleColor.Red;
+                    WriteLine($"nginx configuration does not exist at path {path}!");
+                    ResetColor();
+
+                    bool? @continue = GetBooleanUserInput("Do you want to continue without backing up the file(s)?");
+                    return @continue == true;
                 }
+
+                Directory.CreateDirectory(backupPath);
+                CopyDirectory(path, backupPath);
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("nginx configuration backed up to HOME folder!");
+                ResetColor();
+
+                return true;
             }
 
-            WriteLine("Configuration file created!");
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static void CopyDirectory(string source, string destination)
+        {
+            DirectoryInfo sourceDirectoryInfo = new DirectoryInfo(source);
+            foreach (FileInfo fileInfo in sourceDirectoryInfo.EnumerateFiles())
+            {
+                string path = Path.Combine(destination, fileInfo.Name);
+                fileInfo.CopyTo(path, true);
+            }
+
+            foreach (DirectoryInfo directoryInfo in sourceDirectoryInfo.EnumerateDirectories())
+            {
+                string path = Path.Combine(destination, directoryInfo.Name);
+                CopyDirectory(directoryInfo.FullName, path);
+            }
+        }
+
+        private static bool CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt()
+        {
+            try
+            {
+                WriteLine("Creating configuration file...");
+
+                if (!Directory.Exists(SitesAvailableDirectory))
+                {
+                    Directory.CreateDirectory(SitesAvailableDirectory);
+                }
+
+                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default"))))
+                {
+                    string content = reader.ReadToEnd();
+                    using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("Configuration file created!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
         }
     }
 }
