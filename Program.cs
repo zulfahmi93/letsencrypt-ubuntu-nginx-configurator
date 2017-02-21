@@ -246,10 +246,13 @@ namespace LetsEncryptNginxConfigurator
                 if (!RunProcess("service", "cron restart"))
                 {
                     PrintError("Failed to restart cron service!");
-                    return 17;
                 }
             }
 
+            PrintSuccess("Successfully configure Let's Encrypt! To add new location entry to the nginx configuration, just add new .location.conf file inside /etc/nginx/snippets/ folder.");
+            WriteLine("Press any key to exit...");
+
+            ReadKey();
             return 0;
         }
 
@@ -367,12 +370,34 @@ namespace LetsEncryptNginxConfigurator
             string[] lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
             WriteLine("******************************************************************************");
             WriteLine("*                                                                            *");
-            WriteLine("*                 ███████╗██████╗ ██████╗  ██████╗ ██████╗                  *");
-            WriteLine("*                 ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗                 *");
-            WriteLine("*                 █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝                 *");
-            WriteLine("*                 ██╔══╝  ██╔══██╗██╔══██╗██║   ██║██╔══██╗                 *");
-            WriteLine("*                 ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║                 *");
-            WriteLine("*                 ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝                 *");
+            WriteLine("*                 ███████╗██████╗ ██████╗  ██████╗ ██████╗                   *");
+            WriteLine("*                 ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗                  *");
+            WriteLine("*                 █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝                  *");
+            WriteLine("*                 ██╔══╝  ██╔══██╗██╔══██╗██║   ██║██╔══██╗                  *");
+            WriteLine("*                 ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║                  *");
+            WriteLine("*                 ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝                  *");
+            WriteLine("*                                                                            *");
+
+            foreach (string line in lines)
+            {
+                WriteLine($"*   {line,-70}   *");
+            }
+
+            WriteLine("*                                                                            *");
+            WriteLine("******************************************************************************");
+            WriteLine();
+        }
+
+        private static void PrintSuccess(string message)
+        {
+            string[] lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
+            WriteLine("******************************************************************************");
+            WriteLine("*          ███████╗██╗   ██╗ ██████╗ ██████╗███████╗███████╗███████╗         *");
+            WriteLine("*          ██╔════╝██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝         *");
+            WriteLine("*          ███████╗██║   ██║██║     ██║     █████╗  ███████╗███████╗         *");
+            WriteLine("*          ╚════██║██║   ██║██║     ██║     ██╔══╝  ╚════██║╚════██║         *");
+            WriteLine("*          ███████║╚██████╔╝╚██████╗╚██████╗███████╗███████║███████║         *");
+            WriteLine("*          ╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝╚══════╝╚══════╝╚══════╝         *");
             WriteLine("*                                                                            *");
 
             foreach (string line in lines)
