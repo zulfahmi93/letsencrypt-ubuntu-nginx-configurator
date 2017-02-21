@@ -65,6 +65,7 @@ namespace LetsEncryptNginxConfigurator
                 return 4;
             }
 
+            // run apt-get update
             PrintRunningProcess("Running apt-get update...");
             if (!RunProcess("apt-get", "update"))
             {
@@ -72,6 +73,12 @@ namespace LetsEncryptNginxConfigurator
                 return 5;
             }
 
+            ForegroundColor = ConsoleColor.Green;
+            WriteLine("apt-get update command finished!");
+            ResetColor();
+
+
+            // install nginx package
             PrintRunningProcess("Installing nginx...");
             if (!RunProcess("apt-get", "install nginx"))
             {
@@ -79,6 +86,12 @@ namespace LetsEncryptNginxConfigurator
                 return 6;
             }
 
+            ForegroundColor = ConsoleColor.Green;
+            WriteLine("nginx package installed!");
+            ResetColor();
+
+
+            // install letsencrypt package
             PrintRunningProcess("Installing Let's encrypt...");
             if (!RunProcess("apt-get", "install letsencrypt"))
             {
@@ -86,6 +99,12 @@ namespace LetsEncryptNginxConfigurator
                 return 7;
             }
 
+            ForegroundColor = ConsoleColor.Green;
+            WriteLine("Let's Encrypt package installed!");
+            ResetColor();
+
+
+            // backup nginx configuration
             PrintRunningProcess("Backing up nginx configuration...");
             if (!BackupNginxConfig())
             {
@@ -93,6 +112,8 @@ namespace LetsEncryptNginxConfigurator
                 return 8;
             }
 
+
+            // create new config for nginx to enable Let's Encrypt challenge validation
             PrintRunningProcess("Creating nginx sites-available configuration...");
             if (!CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt())
             {
@@ -100,6 +121,8 @@ namespace LetsEncryptNginxConfigurator
                 return 9;
             }
 
+
+            // run nginx config verifier
             PrintRunningProcess("Checking nginx configuration...");
             if (!RunProcess("nginx", "-t"))
             {
@@ -107,8 +130,12 @@ namespace LetsEncryptNginxConfigurator
                 return 10;
             }
 
+            ForegroundColor = ConsoleColor.Green;
             WriteLine("nginx configuration checker test is passed!");
+            ResetColor();
 
+
+            // restart nginx service
             PrintRunningProcess("Restarting nginx...");
             if (!RunProcess("service", "nginx restart"))
             {
@@ -117,8 +144,12 @@ namespace LetsEncryptNginxConfigurator
             }
 
             Thread.Sleep(TimeSpan.FromSeconds(2));
+            ForegroundColor = ConsoleColor.Green;
             WriteLine("nginx restarted!");
+            ResetColor();
 
+
+            // run certbot
             string args = Regex.IsMatch(domain, @"www") ? domain : $"{domain},www.{domain}";
             PrintRunningProcess("Requesting SSL certificate...");
             if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --register-unsafely-without-email --staging --dry-run --email {email}"))
@@ -127,7 +158,22 @@ namespace LetsEncryptNginxConfigurator
                 return 12;
             }
 
+            ForegroundColor = ConsoleColor.Green;
             WriteLine("SSL certificate obtained!");
+            ResetColor();
+
+
+            // get dhparam with 2048-bit group
+            PrintRunningProcess("Generating strong Diffie-Hellman 2048-bit group...");
+            if (!RunProcess("openssl", "dhparam -out /etc/ssl/certs/dhparam.pem 2048"))
+            {
+                PrintError("Failed to generate strong Diffie-Hellman 2048-bit group!");
+                return 12;
+            }
+
+            ForegroundColor = ConsoleColor.Green;
+            WriteLine("Diffie-Hellman 2048-bit group generated!");
+            ResetColor();
 
 
 
@@ -423,6 +469,7 @@ namespace LetsEncryptNginxConfigurator
             foreach (DirectoryInfo directoryInfo in sourceDirectoryInfo.EnumerateDirectories())
             {
                 string path = Path.Combine(destination, directoryInfo.Name);
+                Directory.CreateDirectory(path);
                 CopyDirectory(directoryInfo.FullName, path);
             }
         }
@@ -438,7 +485,7 @@ namespace LetsEncryptNginxConfigurator
                     Directory.CreateDirectory(SitesAvailableDirectory);
                 }
 
-                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default"))))
+                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default.conf"))))
                 {
                     string content = reader.ReadToEnd();
                     using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
