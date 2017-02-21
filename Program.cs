@@ -187,7 +187,16 @@ namespace LetsEncryptNginxConfigurator
             if (!CopyNginxSslConfiguration(domain))
             {
                 PrintError("Failed to copy nginx SSL configuration file!");
-                return 12;
+                return 13;
+            }
+
+
+            // create final nginx config
+            PrintRunningProcess("Generating new nginx sites-available configuration...");
+            if (!CreateNginxSitesAvailableConfigFinal(domain))
+            {
+                PrintError("Failed to generate new nginx sites-available configuration!");
+                return 14;
             }
 
             return 0;
@@ -563,6 +572,41 @@ namespace LetsEncryptNginxConfigurator
 
                 ForegroundColor = ConsoleColor.Green;
                 WriteLine($"Created file {Path.GetFileName(SslParamsSnippetConfigPath)}!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool CreateNginxSitesAvailableConfigFinal(string domain)
+        {
+            try
+            {
+                if (File.Exists(SitesAvailableDefaultConfigPath))
+                {
+                    WriteLine("Deleting previous configuration file...");
+                    File.Delete(SitesAvailableDefaultConfigPath);
+                }
+
+                WriteLine("Creating new configuration file...");
+                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default-after.conf"))))
+                {
+                    string content = reader.ReadToEnd();
+                    content = string.Format(content, domain);
+
+                    using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("Configuration file created!");
                 ResetColor();
 
                 return true;
