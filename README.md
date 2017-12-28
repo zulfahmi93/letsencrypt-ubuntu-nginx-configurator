@@ -14,7 +14,7 @@ Automatically obtain SSL certificate from Let's Encrypt and install into nginx s
 ## Prerequisites
 
 1. Ubuntu OS (tested on Ubuntu Server 16.04).
-2. .NET Core (tested on version 1.0.0-rc4-004771).
+2. .NET Core (tested on version 2.0.3).
 
 ## Remarks
 
