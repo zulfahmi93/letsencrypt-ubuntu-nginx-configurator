@@ -1,6 +1,4 @@
-﻿using Microsoft.Extensions.PlatformAbstractions;
-
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -19,33 +17,33 @@ namespace LetsEncryptNginxConfigurator
     {
         #region Constants
 
-        private const string NginxDirectory = "/etc/nginx/";
-        private const string SitesAvailableDirectory = NginxDirectory + "sites-available/";
-        private const string NginxSnippetsDirectory = NginxDirectory + "snippets/";
         private const string CronDirectory = "/etc/cron.d/";
-
+        private const string LetsEncryptCronFilePath = CronDirectory + "letsencrypt";
+        private const string NginxDirectory = "/etc/nginx/";
+        private const string NginxSnippetsDirectory = NginxDirectory + "snippets/";
         private const string SitesAvailableDefaultConfigPath = SitesAvailableDirectory + "default";
+        private const string SitesAvailableDirectory = NginxDirectory + "sites-available/";
         private const string SslDomainSnippetConfigPathFormat = NginxSnippetsDirectory + "ssl-{0}.conf";
         private const string SslParamsSnippetConfigPath = NginxSnippetsDirectory + "ssl-params.conf";
-        private const string LetsEncryptCronFilePath = CronDirectory + "letsencrypt";
+
+        #endregion
+
+
+        #region Static Fields
 
         private static readonly char[] SplitChars = { ' ', '-', '\t' };
-
-        #endregion
-
-
-        #region Fields
-
-        private static string _homePath;
-        private static string _appPath;
         private static int _count;
 
+        private static string _homePath;
+
         #endregion
+
+
+        #region Static Methods
 
         public static int Main()
         {
             _homePath = Environment.GetEnvironmentVariable("HOME");
-            _appPath = PlatformServices.Default.Application.ApplicationBasePath;
 
             if (string.IsNullOrWhiteSpace(_homePath))
             {
@@ -54,20 +52,20 @@ namespace LetsEncryptNginxConfigurator
             }
 
             PrintWarning("Your existing nginx configuration will be replaced! The program will make a backup of your current configuration in your HOME folder.");
-            bool? @continue = GetBooleanUserInput("Do you want to continue?");
+            var @continue = GetBooleanUserInput("Do you want to continue?");
             if (@continue != true)
             {
                 return 2;
             }
 
             WriteLine();
-            string domain = GetStringUserInput("Provide your domain");
+            var domain = GetStringUserInput("Provide your domain");
             if (domain == null)
             {
                 return 3;
             }
 
-            string email = GetStringUserInput("Provide your e-mail");
+            var email = GetStringUserInput("Provide your e-mail");
             if (email == null)
             {
                 return 4;
@@ -88,7 +86,7 @@ namespace LetsEncryptNginxConfigurator
 
             // install nginx package
             PrintRunningProcess("Installing nginx...");
-            if (!RunProcess("apt-get", "install nginx"))
+            if (!RunProcess("apt-get", "install nginx -y"))
             {
                 PrintError("Failed to install nginx package! Do you run this configurator as root?");
                 return 6;
@@ -101,7 +99,7 @@ namespace LetsEncryptNginxConfigurator
 
             // install letsencrypt package
             PrintRunningProcess("Installing Let's encrypt...");
-            if (!RunProcess("apt-get", "install letsencrypt"))
+            if (!RunProcess("apt-get", "install letsencrypt -y"))
             {
                 PrintError("Failed to install Let's Encrypt package! Do you run this configurator as root?");
                 return 7;
@@ -158,10 +156,12 @@ namespace LetsEncryptNginxConfigurator
 
 
             // run certbot
-            string args = Regex.IsMatch(domain, @"www") ? domain : $"{domain},www.{domain}";
+            var args = Regex.IsMatch(domain, @"www") ? domain : $"{domain},www.{domain}";
             PrintRunningProcess("Requesting SSL certificate...");
 #if DEBUG
-            if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --staging --dry-run --email {email}"))
+            if (!RunProcess("letsencrypt",
+                            $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --staging --dry-run --email {email}")
+            )
 #else
             if (!RunProcess("letsencrypt", $"certonly --non-interactive --authenticator webroot --webroot-path=/var/www/html --domains {args} --email {email} --agree-tos"))
 #endif
@@ -256,10 +256,268 @@ namespace LetsEncryptNginxConfigurator
             return 0;
         }
 
+        private static bool BackupNginxConfig()
+        {
+            const string path = "/etc/nginx/";
+            var backupPath = Path.Combine(_homePath, "nginx-backup", DateTime.Now.ToString("yyyyMMddHHmm"));
+
+            try
+            {
+                WriteLine("Backing up existing nginx configuration to HOME folder...");
+                if (!Directory.Exists(path))
+                {
+                    ForegroundColor = ConsoleColor.Red;
+                    WriteLine($"nginx configuration does not exist at path {path}!");
+                    ResetColor();
+
+                    var @continue = GetBooleanUserInput("Do you want to continue without backing up the file(s)?");
+                    return @continue == true;
+                }
+
+                Directory.CreateDirectory(backupPath);
+                CopyDirectory(path, backupPath);
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("nginx configuration backed up to HOME folder!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static void CopyDirectory(string source, string destination)
+        {
+            var sourceDirectoryInfo = new DirectoryInfo(source);
+            foreach (var fileInfo in sourceDirectoryInfo.EnumerateFiles())
+            {
+                var path = Path.Combine(destination, fileInfo.Name);
+                fileInfo.CopyTo(path, true);
+            }
+
+            foreach (var directoryInfo in sourceDirectoryInfo.EnumerateDirectories())
+            {
+                var path = Path.Combine(destination, directoryInfo.Name);
+                Directory.CreateDirectory(path);
+                CopyDirectory(directoryInfo.FullName, path);
+            }
+        }
+
+        private static bool CopyNginxSslConfiguration(string domain)
+        {
+            try
+            {
+                var domainSnippetPath = string.Format(SslDomainSnippetConfigPathFormat, domain);
+                if (File.Exists(domainSnippetPath))
+                {
+                    File.Delete(domainSnippetPath);
+                }
+
+                if (File.Exists(SslParamsSnippetConfigPath))
+                {
+                    File.Delete(SslParamsSnippetConfigPath);
+                }
+
+                using (var reader = new StreamReader(File.OpenRead("ssl-snippet.conf")))
+                {
+                    var content = reader.ReadToEnd();
+                    content = string.Format(content, domain);
+
+                    using (var writer = new StreamWriter(File.Open(domainSnippetPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine($"Created file {Path.GetFileName(domainSnippetPath)}!");
+                ResetColor();
+
+                using (var reader = new StreamReader(File.OpenRead("ssl-params-snippet.conf")))
+                {
+                    var content = reader.ReadToEnd();
+                    content = string.Format(content, domain);
+
+                    using (var writer = new StreamWriter(File.Open(SslParamsSnippetConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine($"Created file {Path.GetFileName(SslParamsSnippetConfigPath)}!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool CreateNginxSitesAvailableConfigFinal(string domain)
+        {
+            try
+            {
+                WriteLine("Creating new configuration file...");
+                using (var reader = new StreamReader(File.OpenRead("default-after.conf")))
+                {
+                    var content = reader.ReadToEnd();
+                    content = string.Format(content, domain);
+
+                    using (var writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("Configuration file created!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        private static bool CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt()
+        {
+            try
+            {
+                WriteLine("Creating configuration file...");
+
+                if (!Directory.Exists(SitesAvailableDirectory))
+                {
+                    Directory.CreateDirectory(SitesAvailableDirectory);
+                }
+
+                using (var reader = new StreamReader(File.OpenRead("default.conf")))
+                {
+                    var content = reader.ReadToEnd();
+                    using (var writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("Configuration file created!");
+                ResetColor();
+
+                return true;
+            }
+
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        // thanks to code provided here: http://stackoverflow.com/questions/17586/best-word-wrap-algorithm
+        private static string[] Explode(string str, char[] splitChars)
+        {
+            var parts = new List<string>();
+            var startIndex = 0;
+            while (true)
+            {
+                var index = str.IndexOfAny(splitChars, startIndex);
+
+                if (index == -1)
+                {
+                    parts.Add(str.Substring(startIndex));
+                    return parts.ToArray();
+                }
+
+                var word = str.Substring(startIndex, index - startIndex);
+                var nextChar = str.Substring(index, 1)[0];
+
+                // Dashes and the likes should stick to the word occuring before it. Whitespace doesn't have to.
+                if (char.IsWhiteSpace(nextChar))
+                {
+                    parts.Add(word);
+                    parts.Add(nextChar.ToString());
+                }
+                else
+                {
+                    parts.Add(word + nextChar);
+                }
+
+                startIndex = index + 1;
+            }
+        }
+
+        private static bool? GetBooleanUserInput(string prompt)
+        {
+            while (true)
+            {
+                Write($"{prompt} (y/n/cancel): ");
+                var input = ReadLine();
+                if (input?.Trim().Equals("cancel", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return null;
+                }
+                if (input?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return true;
+                }
+                if (input?.Trim().Equals("n", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return false;
+                }
+
+                WriteLine();
+                WriteLine(@"INVALID INPUT!");
+                WriteLine();
+            }
+        }
+
+        private static string GetStringUserInput(string prompt)
+        {
+            while (true)
+            {
+                Write($"{prompt} (leave blank to cancel): ");
+                var input = ReadLine();
+                return string.IsNullOrWhiteSpace(input) ? null : input;
+            }
+        }
+
+        private static void PrintError(string message)
+        {
+            var lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
+            WriteLine("******************************************************************************");
+            WriteLine("*                                                                            *");
+            WriteLine("*                 ███████╗██████╗ ██████╗  ██████╗ ██████╗                   *");
+            WriteLine("*                 ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗                  *");
+            WriteLine("*                 █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝                  *");
+            WriteLine("*                 ██╔══╝  ██╔══██╗██╔══██╗██║   ██║██╔══██╗                  *");
+            WriteLine("*                 ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║                  *");
+            WriteLine("*                 ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝                  *");
+            WriteLine("*                                                                            *");
+
+            foreach (var line in lines)
+            {
+                WriteLine($"*   {line,-70}   *");
+            }
+
+            WriteLine("*                                                                            *");
+            WriteLine("******************************************************************************");
+            WriteLine();
+        }
+
         private static void PrintRunningProcess(string message)
         {
             _count++;
-            string newMessage = $"{_count:00} => {message}";
+            var newMessage = $"{_count:00} => {message}";
 
             WriteLine();
             WriteLine(Enumerable.Repeat('*', newMessage.Length).ToArray());
@@ -268,16 +526,61 @@ namespace LetsEncryptNginxConfigurator
             WriteLine();
         }
 
+        private static void PrintSuccess(string message)
+        {
+            var lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
+            WriteLine("******************************************************************************");
+            WriteLine("*          ███████╗██╗   ██╗ ██████╗ ██████╗███████╗███████╗███████╗         *");
+            WriteLine("*          ██╔════╝██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝         *");
+            WriteLine("*          ███████╗██║   ██║██║     ██║     █████╗  ███████╗███████╗         *");
+            WriteLine("*          ╚════██║██║   ██║██║     ██║     ██╔══╝  ╚════██║╚════██║         *");
+            WriteLine("*          ███████║╚██████╔╝╚██████╗╚██████╗███████╗███████║███████║         *");
+            WriteLine("*          ╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝╚══════╝╚══════╝╚══════╝         *");
+            WriteLine("*                                                                            *");
+
+            foreach (var line in lines)
+            {
+                WriteLine($"*   {line,-70}   *");
+            }
+
+            WriteLine("*                                                                            *");
+            WriteLine("******************************************************************************");
+            WriteLine();
+        }
+
+        private static void PrintWarning(string message)
+        {
+            var lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
+            WriteLine("******************************************************************************");
+            WriteLine("*                                                                            *");
+            WriteLine("*         ██╗    ██╗ █████╗ ██████╗ ███╗   ██╗██╗███╗   ██╗ ██████╗          *");
+            WriteLine("*         ██║    ██║██╔══██╗██╔══██╗████╗  ██║██║████╗  ██║██╔════╝          *");
+            WriteLine("*         ██║ █╗ ██║███████║██████╔╝██╔██╗ ██║██║██╔██╗ ██║██║  ███╗         *");
+            WriteLine("*         ██║███╗██║██╔══██║██╔══██╗██║╚██╗██║██║██║╚██╗██║██║   ██║         *");
+            WriteLine("*         ╚███╔███╔╝██║  ██║██║  ██║██║ ╚████║██║██║ ╚████║╚██████╔╝         *");
+            WriteLine("*          ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═══╝ ╚═════╝          *");
+            WriteLine("*                                                                            *");
+
+            foreach (var line in lines)
+            {
+                WriteLine($"*   {line,-70}   *");
+            }
+
+            WriteLine("*                                                                            *");
+            WriteLine("******************************************************************************");
+            WriteLine();
+        }
+
         private static bool RunProcess(string processName, string args)
         {
-            ProcessStartInfo startInfo = new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = processName,
                 Arguments = args,
                 CreateNoWindow = true
             };
 
-            Process process = Process.Start(startInfo);
+            var process = Process.Start(startInfo);
             process.WaitForExit();
 
             return process.ExitCode == 0;
@@ -285,8 +588,8 @@ namespace LetsEncryptNginxConfigurator
 
         private static Task<bool> RunProcess(string processName, string args, string successReturn, string failReturn)
         {
-            TaskCompletionSource<bool> tcs = new TaskCompletionSource<bool>();
-            ProcessStartInfo startInfo = new ProcessStartInfo
+            var tcs = new TaskCompletionSource<bool>();
+            var startInfo = new ProcessStartInfo
             {
                 FileName = processName,
                 Arguments = args,
@@ -296,7 +599,7 @@ namespace LetsEncryptNginxConfigurator
                 RedirectStandardError = true
             };
 
-            Process process = new Process();
+            var process = new Process();
             process.StartInfo = startInfo;
             process.OutputDataReceived += (sender, e) =>
             {
@@ -342,84 +645,43 @@ namespace LetsEncryptNginxConfigurator
             return tcs.Task;
         }
 
-        private static void PrintWarning(string message)
+        private static bool ScheduleAutoRenew()
         {
-            string[] lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
-            WriteLine("******************************************************************************");
-            WriteLine("*                                                                            *");
-            WriteLine("*         ██╗    ██╗ █████╗ ██████╗ ███╗   ██╗██╗███╗   ██╗ ██████╗          *");
-            WriteLine("*         ██║    ██║██╔══██╗██╔══██╗████╗  ██║██║████╗  ██║██╔════╝          *");
-            WriteLine("*         ██║ █╗ ██║███████║██████╔╝██╔██╗ ██║██║██╔██╗ ██║██║  ███╗         *");
-            WriteLine("*         ██║███╗██║██╔══██║██╔══██╗██║╚██╗██║██║██║╚██╗██║██║   ██║         *");
-            WriteLine("*         ╚███╔███╔╝██║  ██║██║  ██║██║ ╚████║██║██║ ╚████║╚██████╔╝         *");
-            WriteLine("*          ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝╚═╝  ╚═══╝ ╚═════╝          *");
-            WriteLine("*                                                                            *");
-
-            foreach (string line in lines)
+            try
             {
-                WriteLine($"*   {line,-70}   *");
+                WriteLine("Generating cron file...");
+                using (var reader = new StreamReader(File.OpenRead("cron")))
+                {
+                    var content = reader.ReadToEnd();
+                    using (var writer = new StreamWriter(File.Open(LetsEncryptCronFilePath, FileMode.Create, FileAccess.Write)))
+                    {
+                        writer.Write(content);
+                    }
+                }
+
+                ForegroundColor = ConsoleColor.Green;
+                WriteLine("Configuration file created!");
+                ResetColor();
+
+                return true;
             }
 
-            WriteLine("*                                                                            *");
-            WriteLine("******************************************************************************");
-            WriteLine();
-        }
-
-        private static void PrintError(string message)
-        {
-            string[] lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
-            WriteLine("******************************************************************************");
-            WriteLine("*                                                                            *");
-            WriteLine("*                 ███████╗██████╗ ██████╗  ██████╗ ██████╗                   *");
-            WriteLine("*                 ██╔════╝██╔══██╗██╔══██╗██╔═══██╗██╔══██╗                  *");
-            WriteLine("*                 █████╗  ██████╔╝██████╔╝██║   ██║██████╔╝                  *");
-            WriteLine("*                 ██╔══╝  ██╔══██╗██╔══██╗██║   ██║██╔══██╗                  *");
-            WriteLine("*                 ███████╗██║  ██║██║  ██║╚██████╔╝██║  ██║                  *");
-            WriteLine("*                 ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝                  *");
-            WriteLine("*                                                                            *");
-
-            foreach (string line in lines)
+            catch (Exception)
             {
-                WriteLine($"*   {line,-70}   *");
+                return false;
             }
-
-            WriteLine("*                                                                            *");
-            WriteLine("******************************************************************************");
-            WriteLine();
-        }
-
-        private static void PrintSuccess(string message)
-        {
-            string[] lines = Regex.Split(Wrap(message, 70), Environment.NewLine);
-            WriteLine("******************************************************************************");
-            WriteLine("*          ███████╗██╗   ██╗ ██████╗ ██████╗███████╗███████╗███████╗         *");
-            WriteLine("*          ██╔════╝██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██╔════╝         *");
-            WriteLine("*          ███████╗██║   ██║██║     ██║     █████╗  ███████╗███████╗         *");
-            WriteLine("*          ╚════██║██║   ██║██║     ██║     ██╔══╝  ╚════██║╚════██║         *");
-            WriteLine("*          ███████║╚██████╔╝╚██████╗╚██████╗███████╗███████║███████║         *");
-            WriteLine("*          ╚══════╝ ╚═════╝  ╚═════╝ ╚═════╝╚══════╝╚══════╝╚══════╝         *");
-            WriteLine("*                                                                            *");
-
-            foreach (string line in lines)
-            {
-                WriteLine($"*   {line,-70}   *");
-            }
-
-            WriteLine("*                                                                            *");
-            WriteLine("******************************************************************************");
-            WriteLine();
         }
 
         // thanks to code provided here: http://stackoverflow.com/questions/17586/best-word-wrap-algorithm
         private static string Wrap(string str, int width)
         {
-            string[] words = Explode(str, SplitChars);
+            var words = Explode(str, SplitChars);
 
-            int curLineLength = 0;
-            StringBuilder strBuilder = new StringBuilder();
-            for(int i = 0; i < words.Length; i += 1)
+            var curLineLength = 0;
+            var strBuilder = new StringBuilder();
+            for (var i = 0; i < words.Length; i += 1)
             {
-                string word = words[i];
+                var word = words[i];
                 // If adding the new word to the current line would be too long,
                 // then put it on a new line (and split it up if it's too long).
                 if ((curLineLength + word.Length) > width)
@@ -453,266 +715,6 @@ namespace LetsEncryptNginxConfigurator
             return strBuilder.ToString();
         }
 
-        // thanks to code provided here: http://stackoverflow.com/questions/17586/best-word-wrap-algorithm
-        private static string[] Explode(string str, char[] splitChars)
-        {
-            List<string> parts = new List<string>();
-            int startIndex = 0;
-            while (true)
-            {
-                int index = str.IndexOfAny(splitChars, startIndex);
-
-                if (index == -1)
-                {
-                    parts.Add(str.Substring(startIndex));
-                    return parts.ToArray();
-                }
-
-                string word = str.Substring(startIndex, index - startIndex);
-                char nextChar = str.Substring(index, 1)[0];
-
-                // Dashes and the likes should stick to the word occuring before it. Whitespace doesn't have to.
-                if (char.IsWhiteSpace(nextChar))
-                {
-                    parts.Add(word);
-                    parts.Add(nextChar.ToString());
-                }
-                else
-                {
-                    parts.Add(word + nextChar);
-                }
-
-                startIndex = index + 1;
-            }
-        }
-
-        private static bool? GetBooleanUserInput(string prompt)
-        {
-            while (true)
-            {
-                Write($"{prompt} (y/n/cancel): ");
-                string input = ReadLine();
-                if (input?.Trim().Equals("cancel", StringComparison.OrdinalIgnoreCase) == true)
-                {
-                    return null;
-                }
-                if (input?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true)
-                {
-                    return true;
-                }
-                if (input?.Trim().Equals("n", StringComparison.OrdinalIgnoreCase) == true)
-                {
-                    return false;
-                }
-
-                WriteLine();
-                WriteLine(@"INVALID INPUT!");
-                WriteLine();
-            }
-        }
-
-        private static string GetStringUserInput(string prompt)
-        {
-            while (true)
-            {
-                Write($"{prompt} (leave blank to cancel): ");
-                string input = ReadLine();
-                return string.IsNullOrWhiteSpace(input) ? null : input;
-            }
-        }
-
-        private static bool BackupNginxConfig()
-        {
-            const string path = "/etc/nginx/";
-            string backupPath = Path.Combine(_homePath, "nginx-backup", DateTime.Now.ToString("yyyyMMddHHmm"));
-
-            try
-            {
-                WriteLine("Backing up existing nginx configuration to HOME folder...");
-                if (!Directory.Exists(path))
-                {
-                    ForegroundColor = ConsoleColor.Red;
-                    WriteLine($"nginx configuration does not exist at path {path}!");
-                    ResetColor();
-
-                    bool? @continue = GetBooleanUserInput("Do you want to continue without backing up the file(s)?");
-                    return @continue == true;
-                }
-
-                Directory.CreateDirectory(backupPath);
-                CopyDirectory(path, backupPath);
-
-                ForegroundColor = ConsoleColor.Green;
-                WriteLine("nginx configuration backed up to HOME folder!");
-                ResetColor();
-
-                return true;
-            }
-
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private static void CopyDirectory(string source, string destination)
-        {
-            DirectoryInfo sourceDirectoryInfo = new DirectoryInfo(source);
-            foreach (FileInfo fileInfo in sourceDirectoryInfo.EnumerateFiles())
-            {
-                string path = Path.Combine(destination, fileInfo.Name);
-                fileInfo.CopyTo(path, true);
-            }
-
-            foreach (DirectoryInfo directoryInfo in sourceDirectoryInfo.EnumerateDirectories())
-            {
-                string path = Path.Combine(destination, directoryInfo.Name);
-                Directory.CreateDirectory(path);
-                CopyDirectory(directoryInfo.FullName, path);
-            }
-        }
-
-        private static bool CreateNginxSitesAvailableConfigForSettingUpLetsEncrypt()
-        {
-            try
-            {
-                WriteLine("Creating configuration file...");
-
-                if (!Directory.Exists(SitesAvailableDirectory))
-                {
-                    Directory.CreateDirectory(SitesAvailableDirectory);
-                }
-
-                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default.conf"))))
-                {
-                    string content = reader.ReadToEnd();
-                    using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
-                    {
-                        writer.Write(content);
-                    }
-                }
-
-                ForegroundColor = ConsoleColor.Green;
-                WriteLine("Configuration file created!");
-                ResetColor();
-
-                return true;
-            }
-
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private static bool CopyNginxSslConfiguration(string domain)
-        {
-            try
-            {
-                string domainSnippetPath = string.Format(SslDomainSnippetConfigPathFormat, domain);
-                if (File.Exists(domainSnippetPath))
-                {
-                    File.Delete(domainSnippetPath);
-                }
-
-                if (File.Exists(SslParamsSnippetConfigPath))
-                {
-                    File.Delete(SslParamsSnippetConfigPath);
-                }
-
-                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "ssl-snippet.conf"))))
-                {
-                    string content = reader.ReadToEnd();
-                    content = string.Format(content, domain);
-
-                    using (StreamWriter writer = new StreamWriter(File.Open(domainSnippetPath, FileMode.Create, FileAccess.Write)))
-                    {
-                        writer.Write(content);
-                    }
-                }
-
-                ForegroundColor = ConsoleColor.Green;
-                WriteLine($"Created file {Path.GetFileName(domainSnippetPath)}!");
-                ResetColor();
-
-                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "ssl-params-snippet.conf"))))
-                {
-                    string content = reader.ReadToEnd();
-                    content = string.Format(content, domain);
-
-                    using (StreamWriter writer = new StreamWriter(File.Open(SslParamsSnippetConfigPath, FileMode.Create, FileAccess.Write)))
-                    {
-                        writer.Write(content);
-                    }
-                }
-
-                ForegroundColor = ConsoleColor.Green;
-                WriteLine($"Created file {Path.GetFileName(SslParamsSnippetConfigPath)}!");
-                ResetColor();
-
-                return true;
-            }
-
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private static bool CreateNginxSitesAvailableConfigFinal(string domain)
-        {
-            try
-            {
-                WriteLine("Creating new configuration file...");
-                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "default-after.conf"))))
-                {
-                    string content = reader.ReadToEnd();
-                    content = string.Format(content, domain);
-
-                    using (StreamWriter writer = new StreamWriter(File.Open(SitesAvailableDefaultConfigPath, FileMode.Create, FileAccess.Write)))
-                    {
-                        writer.Write(content);
-                    }
-                }
-
-                ForegroundColor = ConsoleColor.Green;
-                WriteLine("Configuration file created!");
-                ResetColor();
-
-                return true;
-            }
-
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private static bool ScheduleAutoRenew()
-        {
-            try
-            {
-                WriteLine("Generating cron file...");
-                using (StreamReader reader = new StreamReader(File.OpenRead(Path.Combine(_appPath, "cron"))))
-                {
-                    string content = reader.ReadToEnd();
-                    using (StreamWriter writer = new StreamWriter(File.Open(LetsEncryptCronFilePath, FileMode.Create, FileAccess.Write)))
-                    {
-                        writer.Write(content);
-                    }
-                }
-
-                ForegroundColor = ConsoleColor.Green;
-                WriteLine("Configuration file created!");
-                ResetColor();
-
-                return true;
-            }
-
-            catch (Exception)
-            {
-                return false;
-            }
-        }
+        #endregion
     }
 }
